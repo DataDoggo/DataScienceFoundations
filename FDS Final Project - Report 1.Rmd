@@ -1,0 +1,314 @@
+---
+title: "FDS Final Project: Report #1"
+output: 
+  html_document: 
+    highlight: textmate
+    theme: readable
+---
+
+### Part 1.a Scraping the raw data.
+```{r setup, message=FALSE, warning=FALSE, include=FALSE}
+#Basic setup
+library(httr) 
+library(rvest)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(digest)
+library(styler)
+library(ggmap)
+
+flats_html <- xml2::read_html("https://epfl-exts.github.io/rental-scrape/")
+
+#Scrape each data element
+location <-
+flats_html %>% 
+  html_nodes(css = ".address") %>% 
+  html_text()
+
+rooms <-
+flats_html %>% 
+  html_nodes(css = ".rooms") %>% 
+  html_text(trim = TRUE) %>% 
+  str_replace(" Rooms", "")
+
+living_space <-
+flats_html %>% 
+  html_nodes(css = ".living-space") %>% 
+  html_text() %>% 
+  str_replace("Living space: ", "")
+
+floor <- 
+flats_html %>% 
+  html_nodes(css = ".floor") %>% 
+  html_text(trim=TRUE) %>% 
+  str_replace("Floor: ", "") 
+
+flats_html %>% 
+  html_node(css =".price") %>% 
+  html_text2()
+
+object_type <-
+flats_html %>% 
+  html_nodes(css = ".object-type") %>% 
+  html_text(trim = TRUE)
+
+price <-
+flats_html %>% 
+  html_nodes(css = ".price") %>% 
+  html_text(trim = TRUE)
+
+usable_surface <-
+  flats_html %>% 
+  html_nodes(css = ".usable-surface") %>% 
+  html_text(trim = TRUE) %>% 
+  str_replace("Usable surface: ", "")
+
+availability <- 
+  flats_html %>% 
+  html_nodes(css = ".availability") %>% 
+  html_text(trim = TRUE) %>% 
+  str_replace("\nSee More", "") %>% 
+  str_replace("Availability: ", "")
+
+#Combine elements into a tibble for further cleansing.
+scraped_rental_raw <- 
+  bind_cols(location=location, 
+            price=price,
+            object_type=object_type,
+            rooms=rooms, 
+            living_space=living_space, 
+            floor=floor,
+            availability=availability,
+            usable_surface=usable_surface
+            )
+```
+
+### Part 1.b Cleaning up and preparing the data for analysis.
+```{r clean_up, message=FALSE, warning=FALSE, include=FALSE}
+
+#Re-organise the price data into price and currency columns
+scraped_rental <-
+scraped_rental_raw %>% 
+  mutate(price = if_else(price == "Price on request NA", "", price)) %>%  #Clear out the cells with no price.
+  mutate(price = str_split(price, " ")) %>%   #Split the price into two strings: the price value and currency
+  unnest_wider(price) %>%                     #Move the strings into their own, separate columns
+  rename(price = ...1, currency = ...2) %>%   #Rename the newly created columns to price and currency respectively
+  mutate(price = as.numeric(price))           #Convert the price column from character into numeric 
+  
+#Clean up and convert the living_area column to numeric
+scraped_rental <-
+scraped_rental %>% 
+  mutate(living_space = if_else(living_space == "NA", "", str_replace(living_space, "m2", ""))) %>% #Remove NA values and the "m2" notion from all fields with a genuine value in order to convert all genuine values to numeric in next step.
+  mutate(living_space = as.numeric(living_space)) #Convert to numeric
+  
+#Finally, convert the availability column data from character to date format...
+scraped_rental<-
+scraped_rental %>% 
+  mutate(availability = dmy(availability)) 
+
+#...and convert the rooms column data into numeric
+scraped_rental <- 
+  scraped_rental %>% 
+  mutate(rooms = as.numeric(rooms))
+```
+
+### Part 2. Plotted relationship between price and living space.
+```{r plot_price_living, echo=FALSE}
+library(ggplot2)
+
+scraped_rental %>%
+  ggplot(mapping=aes(x= living_space, 
+                     y= price))+
+  geom_point(alpha=0.4)+
+  labs(title="Plotted relationship between price and living space",
+       caption="Data from RentalAgency website",
+       x="Living space in m2", y="Price per month")
+
+```
+The price - living space relationship seems rather consistent up to 200m2 living space, but weakens somewhat as living space exceeds 200m2. 
+
+### Part 3. Displaying the listings by postcode
+```{r chart_post_code, echo=FALSE}
+
+#First, create a tibble for postcode from location column in the full dataset scraped_rental.
+post_code_data <- scraped_rental %>%
+    select(location) %>%            #Select only the location column that contains the postcode
+    mutate(post_code = str_extract_all(location, "[:digit:]{4}")) %>% #Look for and retain only 4 digit strings within the data. 
+    mutate(post_code = as.numeric(post_code)) %>% #Convert postcode to numeric 
+    select(post_code)       #Retain only the post_code column
+
+#Then, create a tibble with listings per postcode.
+listings_per_post_code <- post_code_data %>% 
+  group_by(post_code) %>%
+  summarise(number_of_listings = n())
+
+#Finally, draw the barchart 
+listings_per_post_code %>%
+  ggplot(mapping=aes(x=post_code, 
+                     y=number_of_listings)) +
+  geom_col()+
+  labs(title="Listings per postcode",
+       caption="Data from RentalAgency website",
+       x="Postcode", y="Number of listings")
+```
+
+The agency seems to be more active in the postcodes in the early 1200's.
+
+### Part 4. Price of flats over living space and floor.
+```{r facet_plot, echo=FALSE}
+#First, create a tibble that includes also postcode from location column in the full dataset scraped_rental.
+price_floor_postcode <- scraped_rental %>%
+    select(location, floor, price, living_space) %>%            #Select only the three columns needed
+    mutate(post_code = str_extract_all(location, "[:digit:]{4}")) %>% #Look for and retain only 4 digit strings within the data and add as post_code column
+    mutate(post_code = as.numeric(post_code)) %>% #Convert postcode to numeric 
+    select(-location) %>% #Remove the location column and retain the others
+    mutate(floor = as.numeric(if_else(floor == "NA", "", floor))) %>% #Remove NA values from floor and convert to numeric.
+    filter(floor < 7) %>%             #Include only floors 1-6.
+    mutate(post_code_categories =     #Add a column with postcode categories for visualisation below.
+             case_when(                   
+     post_code <= 1210 ~ "A",
+     post_code <= 1220 ~ "B",
+     post_code <= 1250 ~ "C",
+     post_code <= 1260 ~ "D",
+     TRUE ~ "E")
+     )
+
+price_floor_postcode %>% 
+  ggplot(aes(x=living_space, y=price)) +
+  facet_wrap(vars(floor))+
+  geom_point(aes(color=post_code_categories))+ 
+  theme(legend.position = "none")+     #Do not show the postcode categorisation legend.
+  labs(title="Price of flats over living space",
+       x="Surface in m2", y="Price in CHF")
+```
+
+As per the colours of the plot, it seems that some postcodes are more prominent in having buildings with three or more floors. These are presumably the postcodes for city centres (Lausanne in this case).
+
+### Part 5. Comparing listings with address and address on request. 
+```{r address_or_0, warning=FALSE, include=FALSE}
+#Prepare the data for this analysis
+address_on_request <-
+scraped_rental %>% 
+  filter(object_type != "Hobby room" & object_type != "Cellar compartment") %>% #Filter out outliers in terms of price (and coincidentally floor "Underground")
+  mutate(on_request = str_detect(location, "request|demande")) %>%  #Add a column indicating whether address is on request or not (TRUE/FALSE)
+  select(on_request, location, price, living_space, floor) %>%    #Retain only required columns
+  mutate(floor = as.numeric(if_else(floor == "NA", "", floor))) #Remove NA values from floor and convert to numeric.
+```
+
+In this section, we compare listings whose address is available on request only (Address on request = true) and that have an address provided already in the listing (Address on request = false).  
+First, we view the two types of listings in terms of their price, observing that listings with address available on request being generally more expensive than those with an address provided. 
+```{r address_or_1, echo=FALSE, warning=FALSE}
+address_on_request %>% 
+  group_by(on_request) %>% 
+  ggplot(aes(x=on_request, y=price)) +
+  geom_boxplot(alpha = 0.1, fill="red")+
+  coord_flip()+
+  theme_classic()+
+  labs(x="Address on request", y="Price")
+```
+
+Second, we compare the two types of listings in terms of their living space, observing that listings with address available on request being generally larger than those with an address provided. 
+```{r address_or_2, echo=FALSE, warning=FALSE}
+address_on_request %>% 
+  group_by(on_request) %>% 
+  filter(living_space > 10) %>%     #Remove potential outliers in terms of living space (less than 10m2)
+  ggplot(aes(x=on_request, y=living_space)) +
+  geom_boxplot(alpha = 0.1, fill="blue")+
+  coord_flip()+
+  theme_classic()+
+  scale_y_continuous(breaks = c(50, 100, 150, 200, 250, 300, 350, 400, 450, 500))+
+  labs(x="Address on request", y="Living space")
+```
+
+Finally, comparing in terms of floors, it seems that listings whose addresses are available on request only, tend to be located on lower floors. This makes sense as these listings are likely to be larger (as per previous graph on living space) and hence they might be for instance villas or houses rather than apartments. 
+```{r address_or_3, echo=FALSE, warning=FALSE}
+address_on_request %>% 
+  group_by(on_request) %>% 
+  filter(floor < 20) %>%         #Remove one floor outlier (which can be presumed to be key-in error as according to Google Street view at least there is no 50 story building in the address provided) for better visibility.
+  ggplot(aes(x=on_request, y=floor)) +
+  geom_boxplot(alpha = 0.1, fill="green")+
+  coord_flip()+
+  theme_classic()+
+  scale_y_continuous(breaks = c(1:20))+ #Enhance visibility of graph with a more detailed scale
+  labs(x="Address on request", y="Floor")
+```
+
+### Part 6. Statistical comparison of listings with address and address on request, in terms of price per square meter. 
+In this section, we display a statistical analysis of listings whose address is available on request only (Address on request = true) and that have an address provided already in the listing (Address on request = false) **in terms of their price per square meter.**
+```{r address_or_stats, echo=FALSE}
+address_on_request %>% 
+  filter(price > 100) %>%           #Filter out rows with no or nonsensical price
+  filter(living_space > 10) %>%     #Remove potential outliers in terms of living space (less than 10m2)
+  mutate(price_per_sq = price/living_space) %>% #Add column with price per square meter value
+  group_by(on_request) %>% 
+  summarise(count = n(),
+            median = round(median(price_per_sq), digits=2),
+            mean = round(mean(price_per_sq), digits=2),
+            standard_deviation = round(sd(price_per_sq),digits=2),
+            min = round(min(price_per_sq), digits=2),
+            max = round(max(price_per_sq), digits=2)
+            )
+  
+```
+Initial impression: the means between the two groups don't actually seem very different from each other, as well as the medians and standard deviations are rather similar. Intuitively, this would suggest that there is no statistically significant difference between the two types of listings.
+
+Let's however review this closer with a formal t-test:
+```{r t_test_price_per_sq, echo=FALSE}
+library(infer)
+address_on_request %>% 
+  filter(price > 100) %>%         #Filter out rows with a no or nonsensical prices.
+  filter(living_space > 10) %>%   #Filter out rows with nonsensical living space values.
+  mutate(price_per_sq = price/living_space) %>% 
+  group_by(on_request) %>% 
+  t_test(formula = price_per_sq ~ on_request,
+                   order = c("TRUE", "FALSE"),
+                   conf_level = 0.95)
+```
+The t-test's p-value suggests that there no statistically significant difference between the mean price per square meter for listings with and without addresses. This makes some sense as the price per square meter could be expected to be similar regardless of the size of a home. 
+
+### Part 7. Statistical comparison of listings with address and address on request, in terms of price. 
+In this section, we display a statistical analysis of listings whose address is available on request only (Address on request = true) and that have an address provided already in the listing (Address on request = false) **in terms of their price.**
+```{r t_test_price, echo=FALSE}
+address_on_request %>% 
+  filter(price > 10) %>%          #Filter out rows with nonsensical prices
+  group_by(on_request) %>% 
+  t_test(formula = price ~ on_request,
+                   order = c("TRUE", "FALSE"),
+                   conf_level = 0.95)
+```
+This t-test p-value suggests that there is a statistically significant difference between the mean prices of the two types of listings (with and without address) when compared in terms of the price only. This makes sense as we observed before that the listings with no address listed seem to be more expensive.
+
+### Part 8. Plotting addresses as per their longitude and latitude.
+
+```{r plot_map_data, include=FALSE}
+#Get longitude and latitude data using the Google geolocation API
+register_google(key = "AIzaSyD4KWAm6FqMs-5k8ARR-mgyIbYwzscYaRk")
+getOption("ggmap")
+
+long_lat_addresses <-
+address_on_request %>% 
+ filter(on_request == "FALSE") %>% 
+ sample_n(35) %>% 
+ mutate_geocode(location)
+```
+
+
+```{r plot_map}
+#vaud_map <- get_stamenmap(bbox = c(left=5.9196, bottom=46.1073, right=6.3297, top=46.3497))
+
+#ggmap(vaud_map) +
+#geom_point(data=long_lat_addresses, 
+            #aes(x=lon, y=lat), alpha=0.9, color="purple")+
+       #labs(title="Where are RentalAgency listings in Vaud and Geneva cantons?",
+       #subtitle="Viewing a sample of 30 listings")
+
+#The leaflet map below seems a lot prettier than the generated with the code above, so I'll opt to use the leaflet one only.
+library(leaflet)
+long_lat_addresses %>% 
+ leaflet() %>% 
+   addTiles() %>% 
+   addMarkers(lng=~lon,lat=~lat)
+```
+
