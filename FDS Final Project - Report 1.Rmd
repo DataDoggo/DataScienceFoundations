@@ -294,7 +294,7 @@ This t-test p-value suggests that there is a statistically significant differenc
 
 ### Part 8. Plotting addresses as per their longitude and latitude.  
 
-```{r plot_map_data, eval=FALSE}
+```{r plot_map_data, include=FALSE}
 #Get longitude and latitude data using the Google geolocation API
 register_google(key = "AIzaSyD4KWAm6FqMs-5k8ARR-mgyIbYwzscYaRk")
 getOption("ggmap")
@@ -308,7 +308,7 @@ address_on_request %>%
 ```
 
 
-```{r plot_map, eval=FALSE}
+```{r plot_map, echo=FALSE}
 #vaud_map <- get_stamenmap(bbox = c(left=5.9196, bottom=46.1073, right=6.3297, top=46.3497))
 
 #ggmap(vaud_map) +
