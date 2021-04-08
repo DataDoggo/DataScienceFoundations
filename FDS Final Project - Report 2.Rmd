@@ -1,0 +1,173 @@
+---
+title: 'FDS Final Project: Report #2'
+author: "Satu Iho"
+date: "4/7/2021"
+output: github_document
+---
+
+```{r setup, warning=FALSE, include=FALSE}
+#Basic setup
+library(httr) 
+library(rvest)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(digest)
+library(styler)
+library(ggmap)
+library(remedy)
+library(janitor)
+library(DBI) 
+library(purrr)
+
+zh_politicians_db <- dbConnect(RSQLite::SQLite(), 
+  "~/Desktop/Misc/Omat/EPFL Data Science Course/final_project/zh_politicians.db") 
+
+dbListTables(zh_politicians_db)
+
+#Run in the tables.
+persons_tbl      <- tbl(zh_politicians_db, "PERSONS") 
+addresses_tbl    <- tbl(zh_politicians_db, "ADDRESSES")
+mandates_tbl     <- tbl(zh_politicians_db, "MANDATES") 
+affiliations_tbl <- tbl(zh_politicians_db, "AFFILIATIONS")
+
+#Convert the tables into tibbles.
+persons      <- as_tibble(persons_tbl)
+addresses    <- as_tibble(addresses_tbl)
+mandates     <- as_tibble(mandates_tbl)
+affiliations <- as_tibble(affiliations_tbl)
+
+#Clean up the column names.
+persons      <- clean_names(persons)
+addresses    <- clean_names(addresses)
+mandates     <- clean_names(mandates)
+affiliations <- clean_names(affiliations)
+```
+
+### Part 1. Politicians with an active mandate  
+
+The below plot displays the evolution of the number of Zürich politicians with an active mandate by assembly.   
+
+```{r mandate_plot, echo=FALSE, fig.width=10, message=FALSE, warning=FALSE}
+
+#First, prepare the data for the plot. Having checked the data there is one entry with no start year and several with no end year, so I'll remove the one with no start date and add the current year 2021 as the end date for the ones with no end date yet.
+mandates <-
+mandates %>% 
+  filter(mandate_start_year > 1800) %>%       #Remove the one entry without a start year.
+  mutate(mandate_end_year = replace(mandate_end_year, 
+                                    mandate_end_year == 0, 
+                                    2021))    #Fill in 2021 for mandate end year for the ones entries missing values (0).
+
+#Then, add years_active to indicate active mandate years 
+mandate_evolution <-
+  mandates %>% 
+    mutate(years_active = map2(mandate_start_year, 
+                               mandate_end_year, 
+                               seq)) %>%               #Calculate the years active based on the start and end year.
+    select(person_id, assembly, years_active) %>%      #Exclude redundant columns.
+    unnest()                                           #Unnest the years_active values to obtain a long tibble.
+
+
+#Then, draw the plot itself with ggplot.
+mandate_evolution %>% 
+  group_by(assembly, years_active) %>% 
+  summarise("politicians_with_mandate"=n()) %>% 
+  ggplot(mapping=aes(x    =years_active, 
+                     y    =politicians_with_mandate,
+                     color=assembly))+
+  geom_line()+
+  labs(title="Number of active mandates each year",
+       subtitle="The peaks are caused by election years when multiple mandates were active for the same seat.",
+       x="Years", y="Number of mandates")
+```
+
+### Part 2. Faceted mandates  
+
+This part shows the number of mandates in terms of assembly and gender. 
+
+```{r mandate_faceted, echo=FALSE, fig.width=10, message=FALSE, warning=FALSE}
+#Bring in the gender column from the persons table.  
+mandates_with_gender <-
+mandates %>% 
+  left_join(persons, by=c("person_id"="id")) %>% 
+  select(person_id, gender, assembly, mandate_start_year, mandate_end_year)
+
+#Quickly check for unique values in gender (e.g. to make sure no distinct notions such as M/F, male/female etc. have been used but rather the data is consistent)
+#mandates_with_gender %>% 
+  #distinct(gender)
+#The code above shows that the gender naming convention is consistent so no clean up is needed in this sense.
+
+#For the next steps, I can reuse the code from Part 1, with the addition of gender.
+#First, clean up the data from outliers, null values etc.
+mandates_with_gender_evolution <-
+mandates_with_gender %>% 
+  filter(gender != "") %>%                    #Remove entries with no gender value. 
+  filter(mandate_start_year > 1800) %>%       #Remove the one entry without a start year.
+  mutate(mandate_end_year = if_else(mandate_end_year == 0, 
+                                    2021,
+                                    mandate_end_year))    #Fill in 2021 as mandate end year for the ones entries missing values (0).
+
+#Then, add years_active and exclude unnecessary columns.
+mandates_with_gender_evolution <-
+  mandates_with_gender_evolution %>% 
+  mutate(years_active = map2(mandate_start_year, 
+                               mandate_end_year, 
+                               seq)) %>%                #Calculate the years active based on the start and end year.
+  unnest(years_active)  %>% 
+  select(-starts_with("mandate"))                       #Exclude the two mandate columns.
+
+#Then, draw the plot itself with ggplot.
+mandates_with_gender_evolution %>% 
+  group_by(assembly, years_active, gender) %>% 
+  summarise("politicians_with_mandate"=n()) %>% 
+  ggplot(mapping=aes(    x = years_active, 
+                         y = politicians_with_mandate,
+                     color = gender))+
+  geom_line()+
+  facet_wrap(vars(assembly))+
+  labs(title="Number of active mandates each year by assembly and gender.",
+           x="Years", 
+           y="Number of mandates")
+
+```
+The graphs paint a rather interesting picture in terms of women's participation in Zürich politics: while non-existent until the start of the 1900's, the numbers seem to be converging for the Cantonal Council. 
+
+### Part 3. Party affiliations in 2000.  
+
+```{r parties_in_2000, echo=FALSE, message=FALSE, warning=FALSE}
+
+#Use the affiliations data as a base. 
+affiliations_2000 <-
+affiliations %>% 
+  filter(affiliation_start_year > 1800) %>%                           #Include only complete records.
+  mutate(affiliation_end_year = if_else(affiliation_end_year == 0, 
+                                    2021L,
+                                    affiliation_end_year)) %>%        #Fill in an end year for records missing one.
+  select(person_id, party, ends_with("year")) %>%                     #Retain only the needed columns.
+  mutate(affiliation_active = map2(affiliation_start_year, 
+                                   affiliation_end_year, 
+                                   seq)) %>%                 #Calculate the affiliation active
+  unnest() %>% 
+  filter(affiliation_active == 2000)                         #Retain only rows for the year we're interested in: 2000
+
+#Add in the assembly details for the remaining rows.
+affiliations_2000 <-
+  affiliations_2000 %>% 
+  inner_join(mandates, by="person_id") %>%                   #Use an inner_join to only include records with assembly.
+  select(person_id, party, affiliation_active, assembly)
+
+#Then, draw the piechart
+affiliations_2000 %>% 
+  group_by(party, assembly) %>% 
+  summarise("party_members"=n()) %>% 
+  ggplot(aes(x="", y=party_members, fill=party)) +
+  geom_bar(stat="identity", width=1) +
+  facet_wrap(vars(assembly))+
+  coord_polar("y", start=0)+
+  theme_void()
+```
+
+As was also seen in the previous two graphs, only the Cantonal Council and Executive Council were active in 2000, with the Cantonal Council being much larger (and diverse in terms of parties as shown above).
+
+
