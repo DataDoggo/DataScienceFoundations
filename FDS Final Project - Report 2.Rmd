@@ -142,8 +142,8 @@ affiliations_2000 <-
 affiliations %>% 
   filter(affiliation_start_year > 1800) %>%                           #Include only complete records.
   mutate(affiliation_end_year = if_else(affiliation_end_year == 0, 
-                                    2021L,
-                                    affiliation_end_year)) %>%        #Fill in an end year for records missing one.
+                                        2021L,
+                                        affiliation_end_year)) %>%        #Fill in an end year for records missing one.
   select(person_id, party, ends_with("year")) %>%                     #Retain only the needed columns.
   mutate(affiliation_active = map2(affiliation_start_year, 
                                    affiliation_end_year, 
@@ -155,7 +155,8 @@ affiliations %>%
 affiliations_2000 <-
   affiliations_2000 %>% 
   inner_join(mandates, by="person_id") %>%                   #Use an inner_join to only include records with assembly.
-  select(person_id, party, affiliation_active, assembly)
+  select(person_id, party, affiliation_active, assembly) %>% 
+  filter(party != "")
 
 #Then, draw the piechart
 affiliations_2000 %>% 
@@ -170,4 +171,76 @@ affiliations_2000 %>%
 
 As was also seen in the previous two graphs, only the Cantonal Council and Executive Council were active in 2000, with the Cantonal Council being much larger (and diverse in terms of parties as shown above).
 
+### Part 4. Showing historical party representation by assembly.
+```{r party_historical, echo=FALSE, fig.width=10, message=FALSE, warning=FALSE}
+#As in the previous section, use the affiliations data as a base. 
+affiliations_evolution <-
+affiliations %>% 
+  filter(affiliation_start_year > 1800, party != "", affiliation_end_year < 2022) %>%            
+  mutate(affiliation_end_year = if_else(affiliation_end_year == 0, 
+                                        2021L,
+                                        affiliation_end_year)) %>%    #Fill in an end year for records missing one.
+  select(person_id, party, ends_with("year")) %>%                     #Retain only the needed columns.
+  mutate(affiliation_active = map2(affiliation_start_year, 
+                                   affiliation_end_year, 
+                                   seq))   %>%      #Calculate the affiliation active
+  unnest() %>% 
+  select(-ends_with("year"))
+
+#Add in the assembly details for the remaining rows.
+affiliations_evolution <-
+  affiliations_evolution %>% 
+  inner_join(mandates, by="person_id") %>% 
+  select(person_id, party, affiliation_active, assembly)
+
+#The party name column contains a lot of what seem to be incorrect/nonsensical entries, so the below code cleans them up.
+affiliations_evolution <-
+  affiliations_evolution %>% 
+  mutate(party_corrected = case_when(                   
+     #party == "AL" ~ "AL", 
+     party == "BDP" ~ "BDP",
+     #party == "BGB" ~ "Historical",
+     party == "CSP" ~ "CSP",
+     party == "CVP" ~ "CVP",
+     party == "EDU" ~ "EDU",
+     #party == "Evangelische Volkspartei" ~ "EVP",
+     party == "EVP" ~ "EVP",
+     party == "FDP" ~ "FDP",
+     #party == "FPS" ~ "Minor",
+     party == "GLP" ~ "GLP",
+     party == "GP"  ~ "Grüne",
+     party == "Grüne" ~ "Grüne",
+     #party == "LdU" ~ "Historical",
+     #party == "LS" ~ "AL",
+     party == "PdA" ~ "PdA",
+     #party == "POCH" ~ "Historical",
+     party == "SD" ~ "SD",
+     party == "SP" ~ "SP",
+     party == "SVP" ~ "SVP",
+     party == "SVP/BGB" ~ "SVP",
+     str_detect(party, "Liste") ~ "List",  #Put all the "Liste" ones into one group
+     TRUE ~ "Unknown")) %>%                #Put all others in an unknown group
+  filter(party_corrected != "Unknown")     #Remove the unknown entries
+
+#Finally, time to draw the graph
+affiliations_evolution %>% 
+  filter(party_corrected != "List") %>% 
+  group_by(party_corrected, assembly, affiliation_active) %>% 
+  summarise("no_politicians"=n()) %>% 
+  ggplot(mapping=aes(    x = affiliation_active, 
+                         y = no_politicians,
+                      fill = party_corrected))+
+  geom_area()+
+  facet_wrap(vars(assembly))+
+  labs(title="Number of party members over time.",
+       subtitle="Note: only the larger parties with clearly identifiable names have been included."
+           x="Years", 
+           y="Number of party members")
+```
+
+```{r fig.width=10}
+
+
+
+```
 
