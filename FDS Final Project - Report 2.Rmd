@@ -20,6 +20,8 @@ library(remedy)
 library(janitor)
 library(DBI) 
 library(purrr)
+library(xtable)
+library(infer)
 
 zh_politicians_db <- dbConnect(RSQLite::SQLite(), 
   "~/Desktop/Misc/Omat/EPFL Data Science Course/final_project/zh_politicians.db") 
@@ -233,14 +235,117 @@ affiliations_evolution %>%
   geom_area()+
   facet_wrap(vars(assembly))+
   labs(title="Number of party members over time.",
-       subtitle="Note: only the larger parties with clearly identifiable names have been included."
+       subtitle="Note: only the larger parties with clearly identifiable names have been included.",
            x="Years", 
            y="Number of party members")
 ```
+The above graph shows the number of Zürich politicians over the years. Note: only modern parties whose names were clearly identifiable (as per Wikipedia) from the data set are included. The increasing number which skews to recent years may be partially explained as politicians with no affiliation end date were included in the data and defaulted to 2021. 
 
-```{r fig.width=10}
+### Part 5. Politician ages.
 
+This section analyses the politicians' ages.  
 
+```{r life_span, include=FALSE}
+#Prepare the data by including only complete records, converting to numeric and filtering out any potentially remaining nonsensical values.
+persons_with_life_span <-
+persons %>% 
+  filter(year_of_birth > 1800 & year_of_death > 1800) %>% 
+  mutate(year_of_birth = as.numeric(year_of_birth), year_of_death = as.numeric(year_of_death)) %>% 
+  mutate(life_span = year_of_death - year_of_birth) %>% 
+  filter(life_span > 18 & life_span < 100)
+
+#Save the average life_span into a variable to display within the output text. 
+avg_life_span <-
+persons_with_life_span %>% 
+  summarise(count = n(),
+            min_life_span = min(life_span),
+            max_life_span = max(life_span),
+            avg_life_span = mean(life_span)) %>% 
+  pull(avg_life_span)
+
+```
+The average life span (in years) for politicians is **`r round(avg_life_span, digits=0)`**.  
+
+The average life span (in years) for politicians according to title is displayed below: 
+```{r ages_titles, echo=FALSE, paged.print=FALSE, results='asis'}
+#Use the same code as above but exclude records with blank titles.
+persons_with_life_span_title <-
+persons %>% 
+  filter(year_of_birth > 1800 & year_of_death > 1800) %>% 
+  mutate(year_of_birth = as.numeric(year_of_birth), year_of_death = as.numeric(year_of_death)) %>% 
+  mutate(life_span = year_of_death - year_of_birth) %>% 
+  filter(life_span > 18 & life_span < 100 & title != "")
+
+#Create reference table to view unique titles.
+unique_titles <-
+persons_with_life_span_title %>% 
+  select(title) %>% 
+  unique()
+
+#Harmonise the titles a little bit for more sensible analysis.
+persons_with_life_span_title_corrected <-
+persons_with_life_span_title %>% 
+  mutate(title_corrected = case_when(                   
+     str_detect(title, regex("prof", ignore_case = TRUE)) ~ "Prof.",
+     str_detect(title, regex("dr",   ignore_case = TRUE)) ~ "Dr.",
+     str_detect(title, regex("lic",  ignore_case = TRUE)) ~ "Lic.",
+     TRUE ~ "Other")) %>% 
+  select(id, life_span, title_corrected)
+
+#Calculate average life span per corrected title.
+avg_life_span_with_title <-
+persons_with_life_span_title_corrected %>% 
+  group_by(title_corrected) %>% 
+  summarise(count = n(),
+            avg_life_span = round(mean(life_span), 
+                                  digits = 0))
+
+#Print the table with xtable.
+print(xtable(avg_life_span_with_title,
+                     caption = "Politician average life spans by title", digits = 0),
+      type = "html", caption.placement = "top", html.table.attributes = "border=0")
+```
+
+Next, we compare politicians with and without titles in terms of their lifespan. 
+```{r life_span_title_vs_notitle, echo=FALSE, warning=FALSE}
+#Use the same code as above but this time include records with blank titles.
+persons_with_life_span_including_blank_titles <-
+persons %>% 
+  filter(year_of_birth > 1800 & year_of_death > 1800) %>% 
+  mutate(year_of_birth = as.numeric(year_of_birth), year_of_death = as.numeric(year_of_death)) %>% 
+  mutate(life_span = year_of_death - year_of_birth) %>% 
+  filter(life_span > 18 & life_span < 100)
+
+#Next apply the same title correction as above.
+persons_with_life_span_including_blank_titles <-
+persons_with_life_span_including_blank_titles  %>% 
+  mutate(title_categorised = if_else(title == "", 
+                                        "No title",
+                                        "Title")) %>% 
+  select(id, life_span, title_categorised)
+
+#First, draw a plot of the average age for the two groups.
+persons_with_life_span_including_blank_titles %>% 
+  group_by(title_categorised) %>% 
+  summarise(avg_life_span = mean(life_span)) %>% 
+  ggplot(mapping = aes(   x = title_categorised,
+                          y = avg_life_span,
+                       fill = title_categorised))+
+  geom_col() +
+  scale_y_continuous(breaks = c(20, 30, 40, 50, 60, 70, 80))+
+  labs(title="Average life span for politicians with no title and title",
+           x="", 
+           y="Average life span")
+```
+Based on the chart, it is obvious that there is a difference in the average life span between the two groups, but whether it's big enough to be statistically significant or not is hard to say.
+
+```{r t_test_lifespan, echo=FALSE, warning=FALSE}
+#Perform t-test with the data created above.
+
+persons_with_life_span_including_blank_titles %>% 
+  t_test(formula = life_span ~ title_categorised,
+                   order = c("No title", "Title"),
+                   conf_level = 0.95)
 
 ```
 
